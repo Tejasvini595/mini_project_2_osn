@@ -106,6 +106,7 @@ static char **list_devices_and_get_array(int *out_count)
 }
 
 // phase 1.2
+//phase 2.1- data link layer
 static void packet_handler(u_char *user, const struct pcap_pkthdr *h, const u_char *bytes) 
 {
     (void)user;
@@ -122,12 +123,43 @@ static void packet_handler(u_char *user, const struct pcap_pkthdr *h, const u_ch
            packet_counter, timestr, h->ts.tv_usec, h->caplen);
 
     // print first 16 bytes in hex raw hex dump
-    printf("Data (first 16 bytes): ");
-    int max_bytes = h->caplen < 16 ? h->caplen : 16;
-    for (int i = 0; i < max_bytes; i++) {
-        printf("%02x ", bytes[i]);
+    // printf("Data (first 16 bytes): ");
+    // int max_bytes = h->caplen < 16 ? h->caplen : 16;
+    // for (int i = 0; i < max_bytes; i++) {
+    //     printf("%02x ", bytes[i]);
+    // }
+    // printf("\n-----------------------------------------\n");
+
+    if (h->caplen < sizeof(struct ether_header)) {
+        printf("[!] Truncated packet, no Ethernet header.\n");
+        printf("-----------------------------------------\n");
+        return;
     }
-    printf("\n-----------------------------------------\n");
+
+    const struct ether_header *eth = (const struct ether_header *)bytes;
+
+    // format MAC addresses
+    char src_mac[18], dst_mac[18];
+    snprintf(dst_mac, sizeof(dst_mac), "%02X:%02X:%02X:%02X:%02X:%02X",
+             eth->ether_dhost[0], eth->ether_dhost[1], eth->ether_dhost[2],
+             eth->ether_dhost[3], eth->ether_dhost[4], eth->ether_dhost[5]);
+    snprintf(src_mac, sizeof(src_mac), "%02X:%02X:%02X:%02X:%02X:%02X",
+             eth->ether_shost[0], eth->ether_shost[1], eth->ether_shost[2],
+             eth->ether_shost[3], eth->ether_shost[4], eth->ether_shost[5]);
+
+    // EtherType
+    uint16_t eth_type = ntohs(eth->ether_type);
+    const char *etype_str = "Unknown";
+    switch (eth_type) {
+        case ETHERTYPE_IP:   etype_str = "IPv4"; break;
+        case ETHERTYPE_IPV6: etype_str = "IPv6"; break;
+        case ETHERTYPE_ARP:  etype_str = "ARP";  break;
+    }
+
+    printf("L2 (Ethernet): Dst MAC: %s | Src MAC: %s | EtherType: %s (0x%04X)\n",
+           dst_mac, src_mac, etype_str, eth_type);
+
+    printf("-----------------------------------------\n");
 }
 
 
