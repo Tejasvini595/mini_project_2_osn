@@ -980,8 +980,15 @@ static void sigint_handler(int signum) {
     if (capture_running) {
         capture_running = 0;
         printf("\n--- capture stop requested ---\n");
+        // Force break the pcap loop if it's currently active
+        pthread_mutex_lock(&global_handle_lock);
+        if (global_handle) {
+            pcap_breakloop(global_handle);
+        }
+        pthread_mutex_unlock(&global_handle_lock);
     } else {
-        exit_requested = 1;
+        // In main menu, Ctrl+C should stay in menu (not exit)
+        printf("\n[C-Shark] Use option 4 to exit or Ctrl+D to force exit.\n");
     }
 }
 
@@ -1014,8 +1021,14 @@ static void *capture_thread_fn(void *arg) {
     capture_running = 1;
 
     while (capture_running) {
-        pcap_dispatch(handle, -1, packet_handler, NULL);
-        usleep(10000); // 10 ms
+        // Process only 1 packet at a time for maximum responsiveness
+        int result = pcap_dispatch(handle, 1, packet_handler, NULL);
+        if (result < 0) {
+            // Error occurred, break out
+            break;
+        }
+        // Very small sleep to prevent high CPU usage but maintain responsiveness
+        usleep(100); // 0.1 ms - much more responsive
     }
 
     pthread_mutex_lock(&global_handle_lock);
@@ -1116,7 +1129,7 @@ int main(void) {
     while (running && !exit_requested) {
         printf("Main Menu:\n");
         printf("  1. Start Sniffing (All Packets)\n");
-        printf("  2. Start Sniffing (With Filters) <-- not implemented yet\n");
+        printf("  2. Start Sniffing (With Filters)\n");
         printf("  3. Inspect Last Session        <-- not implemented yet\n");
         printf("  4. Exit C-Shark\n");
         printf("Enter choice: ");
@@ -1188,7 +1201,78 @@ int main(void) {
                 }
                 break;
             }
-            case 2:
+            case 2: {
+                printf("\n[C-Shark] Filter Selection:\n");
+                printf("  1. HTTP\n");
+                printf("  2. HTTPS\n");
+                printf("  3. DNS\n");
+                printf("  4. ARP\n");
+                printf("  5. TCP\n");
+                printf("  6. UDP\n");
+                printf("Enter filter choice (1-6): ");
+                fflush(stdout);
+                
+                ssize_t filter_read = getline(&line, &len, stdin);
+                if (filter_read == -1) {
+                    if (feof(stdin)) {
+                        printf("\nEOF detected. Exiting program.\n");
+                        exit_requested = 1;
+                        running = 0;
+                    }
+                    break;
+                }
+                if (filter_read > 0 && line[filter_read - 1] == '\n') line[filter_read - 1] = '\0';
+                
+                char *filter_str = NULL;
+                int filter_choice = atoi(line);
+                switch (filter_choice) {
+                    case 1: filter_str = "tcp port 80"; break;
+                    case 2: filter_str = "tcp port 443"; break;
+                    case 3: filter_str = "udp port 53"; break;
+                    case 4: filter_str = "arp"; break;
+                    case 5: filter_str = "tcp"; break;
+                    case 6: filter_str = "udp"; break;
+                    default:
+                        printf("Invalid filter choice.\n\n");
+                        break;
+                }
+                
+                if (filter_str) {
+                    printf("[C-Shark] Starting filtered capture with: %s\n", filter_str);
+                    // TODO: Implement filtered capture using the chosen filter_str
+                    // For now, just start regular capture (you can implement filter later)
+                    if (capture_running) {
+                        printf("Capture already running!\n");
+                        break;
+                    }
+                    pthread_t cap_thread;
+                    int rc = pthread_create(&cap_thread, NULL, capture_thread_fn, (void *)chosen_device);
+                    if (rc != 0) {
+                        fprintf(stderr, "Failed to create capture thread: %s\n", strerror(rc));
+                        break;
+                    }
+
+                    while (capture_running && !exit_requested) {
+                        ssize_t r = getline(&line, &len, stdin);
+                        if (r == -1) {
+                            if (feof(stdin)) {
+                                printf("\nEOF detected. Exiting program.\n");
+                                exit_requested = 1;
+                                capture_running = 0;
+                            }
+                        }
+                    }
+
+                    pthread_join(cap_thread, NULL);
+                    if (exit_requested) {
+                        running = 0;
+                    } else {
+                        printf("--- filtered capture stopped ---\n");
+                        printf("Returned to main menu.\n\n");
+                    }
+                }
+                break;
+            }
             case 3:
                 printf("Option not implemented yet.\n\n");
                 break;

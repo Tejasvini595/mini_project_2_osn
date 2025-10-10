@@ -1,0 +1,9 @@
+1 Customer 101
+1 Customer 102
+1 Customer 103
+1 Customer 104
+2 Customer 105
+2 Customer 106
+3 Customer 107
+3 Customer 108
+<EOF>

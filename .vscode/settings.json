@@ -1,0 +1,14 @@
+{
+    "files.associations": {
+        "future": "c",
+        "latch": "c",
+        "mutex": "c",
+        "semaphore": "c",
+        "shared_mutex": "c",
+        "stop_token": "c",
+        "expected": "c",
+        "memory": "c",
+        "memory_resource": "c",
+        "cstdio": "c"
+    }
+}

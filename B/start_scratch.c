@@ -21,7 +21,6 @@
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
-
 #define MAX_PACKETS 10000
 
 
@@ -32,12 +31,14 @@ static volatile sig_atomic_t capture_running = 0;
 static volatile sig_atomic_t exit_requested = 0;
 static uint64_t packet_counter = 0;
 
-typedef struct {
+typedef struct 
+{
     char *device;
     char *filter_exp;
 } capture_args_t;
 
-typedef struct {
+typedef struct 
+{
     struct pcap_pkthdr header;
     u_char *data;
 } stored_packet_t;
@@ -67,17 +68,26 @@ static void sigint_handler(int signum)
     {
         capture_running = 0;
         printf("\n\n[!] Capture stop requested - press Enter to return to menu...\n");
+        // Break out of pcap loop immediately
+        pthread_mutex_lock(&global_handle_lock);
+        if (global_handle) {
+            pcap_breakloop(global_handle);
+        }
+        pthread_mutex_unlock(&global_handle_lock);
     } 
     else 
     {
-        exit_requested = 1;
+        // In main menu, Ctrl+C should do nothing (stay in menu)
+        printf("\n[!] Use option 4 to exit C-Shark\n");
     }
 }
 
 
+
 // layer 7
 // ===== Helper: Identify application protocol by port =====
-const char* identify_app_protocol(uint16_t src_port, uint16_t dst_port) {
+const char* identify_app_protocol(uint16_t src_port, uint16_t dst_port) 
+{
     // Check both directions
     if (src_port == 80 || dst_port == 80) return "HTTP";
     if (src_port == 443 || dst_port == 443) return "HTTPS/TLS";
@@ -90,19 +100,23 @@ const char* identify_app_protocol(uint16_t src_port, uint16_t dst_port) {
 }
 
 // ===== Helper: Hex + ASCII dump =====
-void hex_ascii_dump(const u_char *payload, int len) {
+void hex_ascii_dump(const u_char *payload, int len) 
+{
     int i, j;
-    for (i = 0; i < len; i += 16) {
+    for (i = 0; i < len; i += 16) 
+    {
         // Hex
         printf("  ");
-        for (j = 0; j < 16 && i + j < len; j++) {
+        for (j = 0; j < 16 && i + j < len; j++) 
+        {
             printf("%02X ", payload[i + j]);
         }
         for (; j < 16; j++) printf("   "); // padding for alignment
 
         printf(" ");
         // ASCII
-        for (j = 0; j < 16 && i + j < len; j++) {
+        for (j = 0; j < 16 && i + j < len; j++) 
+        {
             unsigned char c = payload[i + j];
             printf("%c", (c >= 32 && c <= 126) ? c : '.');
         }
@@ -112,7 +126,8 @@ void hex_ascii_dump(const u_char *payload, int len) {
 
 // ===== L7 Decoder =====
 void print_layer7_payload(const u_char *payload, int payload_len,
-                          uint16_t src_port, uint16_t dst_port) {
+                          uint16_t src_port, uint16_t dst_port) 
+{
     if (payload_len <= 0) return;
 
     const char *app_proto = identify_app_protocol(src_port, dst_port);
@@ -127,8 +142,10 @@ void print_layer7_payload(const u_char *payload, int payload_len,
 
 
 
-static const char* port_to_service(uint16_t port) {
-    switch (port) {
+static const char* port_to_service(uint16_t port) 
+{
+    switch (port) 
+    {
         case 53:  return "DNS";
         case 80:  return "HTTP";
         case 443: return "HTTPS";
@@ -142,8 +159,10 @@ static const char* port_to_service(uint16_t port) {
 
 
 // layer 4
-static void decode_l4(uint8_t proto, const u_char *l4, int l4_len) {
-    if (proto == IPPROTO_TCP && l4_len >= (int)sizeof(struct tcphdr)) {
+static void decode_l4(uint8_t proto, const u_char *l4, int l4_len) 
+{
+    if (proto == IPPROTO_TCP && l4_len >= (int)sizeof(struct tcphdr)) 
+    {
         const struct tcphdr *tcp = (const struct tcphdr *)l4;
 
         uint16_t sport = ntohs(tcp->th_sport);
@@ -227,7 +246,8 @@ static void decode_l3(uint16_t eth_type, const u_char *l3, int l3_len)
         inet_ntop(AF_INET, &ip_hdr->ip_dst, dst_ip, sizeof(dst_ip));
 
         printf("L3 (IPv4): Src IP: %s | Dst IP: %s | Protocol: ", src_ip, dst_ip);
-        switch (ip_hdr->ip_p) {
+        switch (ip_hdr->ip_p) 
+        {
             case IPPROTO_TCP: printf("TCP (6)"); break;
             case IPPROTO_UDP: printf("UDP (17)"); break;
             case IPPROTO_ICMP: printf("ICMP (1)"); break;
@@ -247,9 +267,10 @@ static void decode_l3(uint16_t eth_type, const u_char *l3, int l3_len)
         int l4_len = l3_len - ip_hdr->ip_hl * 4;
         decode_l4(ip_hdr->ip_p, l4, l4_len);
 
+    }
 
-    } 
-    else if (eth_type == ETHERTYPE_IPV6 && l3_len >= (int)sizeof(struct ip6_hdr)) {
+    else if (eth_type == ETHERTYPE_IPV6 && l3_len >= (int)sizeof(struct ip6_hdr)) 
+    {
         // -------- IPv6 --------
         const struct ip6_hdr *ip6_hdr = (const struct ip6_hdr *)l3;
 
@@ -259,7 +280,8 @@ static void decode_l3(uint16_t eth_type, const u_char *l3, int l3_len)
 
         printf("L3 (IPv6): Src IP: %s | Dst IP: %s\n", src_ip, dst_ip);
         printf("Next Header: ");
-        switch (ip6_hdr->ip6_nxt) {
+        switch (ip6_hdr->ip6_nxt) 
+        {
             case IPPROTO_TCP: printf("TCP (6)"); break;
             case IPPROTO_UDP: printf("UDP (17)"); break;
             default: printf("Unknown (%d)", ip6_hdr->ip6_nxt); break;
@@ -280,7 +302,8 @@ static void decode_l3(uint16_t eth_type, const u_char *l3, int l3_len)
     } 
     
     
-    else if (eth_type == ETHERTYPE_ARP && l3_len >= (int)sizeof(struct arphdr)) {
+    else if (eth_type == ETHERTYPE_ARP && l3_len >= (int)sizeof(struct arphdr)) 
+    {
         // -------- ARP --------
         const struct arphdr *arp_hdr = (const struct arphdr *)l3;
 
@@ -318,9 +341,6 @@ static void decode_l3(uint16_t eth_type, const u_char *l3, int l3_len)
 
 
 
-
-
-
 // this part prints the available devices like wlan0, etc
 static char **list_devices_and_get_array(int *out_count) 
 {
@@ -337,7 +357,8 @@ static char **list_devices_and_get_array(int *out_count)
     int count = 0;
     for (d = alldevs; d; d = d->next) count++;
     
-    if (count == 0) {
+    if (count == 0) 
+    {
         pcap_freealldevs(alldevs);
         *out_count = 0;
         return NULL;
@@ -360,6 +381,7 @@ static char **list_devices_and_get_array(int *out_count)
     *out_count = count;
     return names;
 }
+
 
 // phase 1.2
 //phase 2.1- data link layer
@@ -407,7 +429,8 @@ static void packet_handler(u_char *user, const struct pcap_pkthdr *h, const u_ch
     // }
     // printf("\n-----------------------------------------\n");
 
-    if (h->caplen < sizeof(struct ether_header)) {
+    if (h->caplen < sizeof(struct ether_header)) 
+    {
         printf("[!] Truncated packet, no Ethernet header.\n");
         printf("-----------------------------------------\n");
         return;
@@ -427,7 +450,8 @@ static void packet_handler(u_char *user, const struct pcap_pkthdr *h, const u_ch
     // EtherType
     uint16_t eth_type = ntohs(eth->ether_type);
     const char *etype_str = "Unknown";
-    switch (eth_type) {
+    switch (eth_type) 
+    {
         case ETHERTYPE_IP:   etype_str = "IPv4"; break;
         case ETHERTYPE_IPV6: etype_str = "IPv6"; break;
         case ETHERTYPE_ARP:  etype_str = "ARP";  break;
@@ -444,6 +468,7 @@ static void packet_handler(u_char *user, const struct pcap_pkthdr *h, const u_ch
     decode_l3(eth_type, l3, l3_len);
 
     printf("-----------------------------------------\n");
+
 }
 
 
@@ -494,7 +519,8 @@ void start_capture_session(char *device, char *filter_exp)
             }
         }
         int ret = pcap_dispatch(handle, 1, packet_handler, NULL);
-        if (ret < 0) {
+        if (ret < 0) 
+        {
             fprintf(stderr, "pcap_dispatch error: %s\n", pcap_geterr(handle));
             break;
         }
@@ -849,8 +875,10 @@ static void print_udp_details(const u_char *l4, int l4_len) {
 
 
 
-void inspect_last_session() {
-    if (aquarium_count == 0) {
+void inspect_last_session() 
+{
+    if (aquarium_count == 0) 
+    {
         printf("\n[!] No packets captured in last session.\n");
         return;
     }
@@ -860,7 +888,8 @@ void inspect_last_session() {
     printf("ID  TIME       LEN  L3_SRC -> L3_DST                      L4_SRC->DST   PROTO\n");
     printf("-------------------------------------------------------------------------------\n");
 
-    for (int i = 0; i < aquarium_count; ++i) {
+    for (int i = 0; i < aquarium_count; ++i) 
+    {
         char timestr[32];
         time_t sec = packet_aquarium[i]->header.ts.tv_sec;
         struct tm *tm = localtime(&sec);
@@ -918,7 +947,8 @@ void inspect_last_session() {
     if (!fgets(buf, sizeof(buf), stdin)) return;
     int id = atoi(buf);
     if (id <= 0) return;    // treat 0 as return
-    if (id < 0 || id >= aquarium_count) {
+    if (id < 0 || id >= aquarium_count) 
+    {
         printf("[!] Invalid packet ID\n");
         return;
     }
@@ -1020,6 +1050,8 @@ int main()
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = sigint_handler;
+    sa.sa_flags = 0; // No SA_RESTART - let getline be interrupted
+    sigemptyset(&sa.sa_mask);
     sigaction(SIGINT, &sa, NULL);
 
     printf("==============================================\n");
@@ -1042,8 +1074,19 @@ int main()
     while (1) 
     {
         printf("\nSelect an interface to sniff (1-%d): ", devcount);
-        if (getline(&line, &len, stdin) == -1) 
-        goto cleanup_and_exit;
+        ssize_t read_result = getline(&line, &len, stdin);
+        if (read_result == -1) 
+        {
+            if (feof(stdin)) {
+                // True EOF (Ctrl+D)
+                goto cleanup_and_exit;
+            } else {
+                // Signal interruption (Ctrl+C) - continue loop
+                clearerr(stdin);
+                printf("\n");
+                continue;
+            }
+        }
         
         // converts string to a long int
         long v = strtol(line, NULL, 10);
@@ -1071,10 +1114,19 @@ int main()
         printf("Enter choice: ");
         
         //ctrl d
-        if (getline(&line, &len, stdin) == -1) 
+        ssize_t read_result = getline(&line, &len, stdin);
+        if (read_result == -1) 
         {
-            printf("\nEOF detected. Exiting.\n");
-            break;
+            if (feof(stdin)) {
+                // True EOF (Ctrl+D)
+                printf("\nEOF detected. Exiting.\n");
+                break;
+            } else {
+                // Signal interruption (Ctrl+C) - continue loop
+                clearerr(stdin);
+                printf("\n");
+                continue;
+            }
         }
         
         switch (atoi(line)) 
