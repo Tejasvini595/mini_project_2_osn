@@ -40,24 +40,24 @@ uint64
 sys_sbrk(void)
 {
   uint64 addr;
+  int t;
   int n;
 
   argint(0, &n);
+  argint(1, &t);
   addr = myproc()->sz;
 
-  // part1 - Always use lazy allocation for demand paging
-  if(n < 0) {
-    // For shrinking, actually deallocate pages
+  if(t == SBRK_EAGER || n < 0) {
     if(growproc(n) < 0) {
       return -1;
     }
   } else {
-    // part1 - Lazily allocate memory: increase size but don't allocate physical pages
+    // Lazily allocate memory for this process: increase its memory
+    // size but don't allocate memory. If the processes uses the
+    // memory, vmfault() will allocate it.
     if(addr + n < addr)
       return -1;
     myproc()->sz += n;
-    // Log the heap expansion
-    printf("[HEAP] pid=%d expand to 0x%lx (lazy)\n", myproc()->pid, myproc()->sz);
   }
   return addr;
 }

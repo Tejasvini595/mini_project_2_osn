@@ -7,7 +7,6 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "fs.h"
-#include "file.h"
 
 /*
  * the kernel's page table.
@@ -214,7 +213,6 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 
 // Allocate PTEs and physical memory to grow a process from oldsz to
 // newsz, which need not be page aligned.  Returns new size or 0 on error.
-// part1 - Modified to support lazy allocation
 uint64
 uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
 {
@@ -224,15 +222,6 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
   if(newsz < oldsz)
     return oldsz;
 
-  // part1 - Check if this is being called from exec for lazy loading
-  struct proc *p = myproc();
-  if(p && p->execfile) {
-    // During exec with demand paging - don't allocate physical pages
-    // Just return the new size, pages will be allocated on demand
-    return newsz;
-  }
-  
-  // Original behavior for other cases (like stack, etc.)
   oldsz = PGROUNDUP(oldsz);
   for(a = oldsz; a < newsz; a += PGSIZE){
     mem = kalloc();
@@ -458,66 +447,29 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 
 // allocate and map user memory if process is referencing a page
 // that was lazily allocated in sys_sbrk().
-//part1 - Comprehensive page fault handler for demand paging
+// returns 0 if va is invalid or already mapped, or if
+// out of physical memory, and physical address if successful.
 uint64
-vmfault(pagetable_t pagetable, uint64 va, int write)
+vmfault(pagetable_t pagetable, uint64 va, int read)
 {
+  uint64 mem;
   struct proc *p = myproc();
-  uint64 pa = 0;
+
+  if (va >= p->sz)
+    return 0;
   va = PGROUNDDOWN(va);
-  
-  // Log the page fault
-  printf("[PAGEFAULT] pid=%d va=0x%lx %s\n", p->pid, va, write ? "WRITE" : "READ");
-  
-  // Check if already mapped
   if(ismapped(pagetable, va)) {
-    return 0; // Already mapped
-  }
-  
-  // part1 - Determine fault type and handle accordingly
-  if(va >= p->text_start && va < p->text_end) {
-    // Text segment - load from executable
-    pa = load_page_from_exec(p, va, 0); // 0 = text segment
-    if(pa) printf("[LOADEXEC] pid=%d va=0x%lx pa=0x%lx (text)\n", p->pid, va, pa);
-  }
-  else if(va >= p->data_start && va < p->data_end) {
-    // Data segment - load from executable  
-    pa = load_page_from_exec(p, va, 1); // 1 = data segment
-    if(pa) printf("[LOADEXEC] pid=%d va=0x%lx pa=0x%lx (data)\n", p->pid, va, pa);
-  }
-  else if(va < p->sz) {
-    // Heap area - allocate zero-filled page
-    pa = alloc_zero_page(p, va);
-    if(pa) printf("[ALLOC] pid=%d va=0x%lx pa=0x%lx (heap)\n", p->pid, va, pa);
-  }
-  else if(va < PGROUNDUP(p->trapframe->sp) && va >= p->trapframe->sp - PGSIZE) {
-    // Stack area (within one page below SP) 
-    pa = alloc_zero_page(p, va);
-    if(pa) printf("[ALLOC] pid=%d va=0x%lx pa=0x%lx (stack)\n", p->pid, va, pa);
-  }
-  else {
-    // Invalid access - terminate process
-    printf("[INVALID] pid=%d va=0x%lx - terminating process\n", p->pid, va);
-    setkilled(p);
     return 0;
   }
-  
-  // If page was successfully allocated/loaded, add to FIFO tracking
-  if(pa) {
-    if(p->num_pages < 1024) {
-      p->pages[p->num_pages].va = va;
-      p->pages[p->num_pages].seq = p->next_seq++;
-      p->pages[p->num_pages].in_swap = 0;
-      p->pages[p->num_pages].dirty = write ? 1 : 0;
-      p->pages[p->num_pages].swap_index = -1;
-      p->num_pages++;
-      
-      printf("[RESIDENT] pid=%d va=0x%lx pa=0x%lx seq=%d\n", 
-              p->pid, va, pa, p->pages[p->num_pages-1].seq);
-    }
+  mem = (uint64) kalloc();
+  if(mem == 0)
+    return 0;
+  memset((void *) mem, 0, PGSIZE);
+  if (mappages(p->pagetable, va, PGSIZE, mem, PTE_W|PTE_U|PTE_R) != 0) {
+    kfree((void *)mem);
+    return 0;
   }
-  
-  return pa;
+  return mem;
 }
 
 int
@@ -531,66 +483,4 @@ ismapped(pagetable_t pagetable, uint64 va)
     return 1;
   }
   return 0;
-}
-
-//part1 - Load a page from the executable file
-uint64
-load_page_from_exec(struct proc *p, uint64 va, int is_data)
-{
-  if(!p->execfile) return 0;
-  
-  // Try to allocate physical page - handle case where memory is full
-  char *pa = kalloc();
-  if(pa == 0) {
-    // TODO: Implement page replacement here when memory is full
-    return 0;
-  }
-  
-  memset(pa, 0, PGSIZE);
-  
-  // Read the page from executable file
-  // For simplicity, we'll read from the file based on the virtual address
-  // In a real implementation, we'd need to map VA to file offsets using ELF headers
-  ilock(p->execfile->ip);
-  int bytes_read = readi(p->execfile->ip, 0, (uint64)pa, va, PGSIZE);
-  iunlock(p->execfile->ip);
-  
-  if(bytes_read < 0) {
-    kfree(pa);
-    return 0;
-  }
-  
-  // Map the page with appropriate permissions
-  int perm = PTE_U | PTE_R;
-  if(is_data) perm |= PTE_W; // Data segment is writable
-  else perm |= PTE_X; // Text segment is executable
-  
-  if(mappages(p->pagetable, va, PGSIZE, (uint64)pa, perm) < 0) {
-    kfree(pa);
-    return 0;
-  }
-  
-  return (uint64)pa;
-}
-
-//part1 - Allocate a zero-filled page for heap/stack
-uint64
-alloc_zero_page(struct proc *p, uint64 va)
-{
-  // Try to allocate physical page
-  char *pa = kalloc();
-  if(pa == 0) {
-    // TODO: Implement page replacement here when memory is full
-    return 0;
-  }
-  
-  memset(pa, 0, PGSIZE);
-  
-  // Map the page as read-write for user
-  if(mappages(p->pagetable, va, PGSIZE, (uint64)pa, PTE_W | PTE_U | PTE_R) < 0) {
-    kfree(pa);
-    return 0;
-  }
-  
-  return (uint64)pa;
 }

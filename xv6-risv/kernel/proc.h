@@ -80,21 +80,6 @@ struct trapframe {
 };
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
-extern struct proc *initproc;
-
-//part1
-#define MAX_SWAP_PAGES 1024
-
-//changes for part1
-struct pageinfo {
-  uint64 va;       // virtual address (page-aligned)
-  int seq;         // FIFO sequence number
-  int in_swap;     // 0=resident, 1=swapped
-  int dirty;       // has been written since load
-  int swap_index;  // index in swap file if in_swap
-};
-
-
 
 // Per-process state
 struct proc {
@@ -119,19 +104,4 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
-
-   // Demand paging & swap bookkeeping:
-   // part1
-  int next_seq;                 // next sequence number for FIFO
-  struct pageinfo pages[1024];  // max pages tracked per proc
-  int num_pages;                // current number of resident+swapped pages
-
-  struct file *swapfile;        // private swap file (/pgswpXXXXX)
-  int swap_pages;               // how many pages currently in swap
-  
-  // part1 - executable file tracking for demand loading
-  struct file *execfile;        // reference to executable file for demand loading
-  uint64 text_start, text_end;  // text segment boundaries
-  uint64 data_start, data_end;  // data segment boundaries
-
 };

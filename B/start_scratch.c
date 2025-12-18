@@ -83,7 +83,7 @@ static void sigint_handler(int signum)
 }
 
 
-
+//############## LLM Generated Code Begins ##############
 // layer 7
 // ===== Helper: Identify application protocol by port =====
 const char* identify_app_protocol(uint16_t src_port, uint16_t dst_port) 
@@ -421,13 +421,11 @@ static void packet_handler(u_char *user, const struct pcap_pkthdr *h, const u_ch
     printf("\nPacket #%lu | Timestamp: %s.%06ld | Length: %d bytes\n",
            packet_counter, timestr, h->ts.tv_usec, h->caplen);
 
-    // print first 16 bytes in hex raw hex dump
-    // printf("Data (first 16 bytes): ");
-    // int max_bytes = h->caplen < 16 ? h->caplen : 16;
-    // for (int i = 0; i < max_bytes; i++) {
-    //     printf("%02x ", bytes[i]);
-    // }
-    // printf("\n-----------------------------------------\n");
+    // Show first 64 bytes hex dump for consistency with forensic analysis
+    printf("Data (first 64 bytes):\n");
+    int max_bytes = h->caplen < 64 ? h->caplen : 64;
+    hex_ascii_dump(bytes, max_bytes);
+    printf("-----------------------------------------\n");
 
     if (h->caplen < sizeof(struct ether_header)) 
     {
@@ -938,7 +936,7 @@ void inspect_last_session()
         }
 
         printf("%-3d %-8s %-4d %-22s -> %-22s %6s->%-6s %s\n",
-               i, timestr, packet_aquarium[i]->header.caplen,
+               i + 1, timestr, packet_aquarium[i]->header.caplen,
                l3src, l3dst, l4src, l4dst, proto_str);
     }
 
@@ -947,13 +945,13 @@ void inspect_last_session()
     if (!fgets(buf, sizeof(buf), stdin)) return;
     int id = atoi(buf);
     if (id <= 0) return;    // treat 0 as return
-    if (id < 0 || id >= aquarium_count) 
+    if (id < 1 || id > aquarium_count) 
     {
         printf("[!] Invalid packet ID\n");
         return;
     }
 
-    stored_packet_t *pkt = packet_aquarium[id];
+    stored_packet_t *pkt = packet_aquarium[id - 1];  // Convert to 0-based index
     const u_char *frame = pkt->data;
     int frame_len = pkt->header.caplen;
 

@@ -19,9 +19,6 @@ extern void forkret(void);
 static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
-//part1
-extern char initcode[];
-extern uint initcode_size;
 
 // helps ensure that wakeups of wait()ing
 // parents are not lost. helps obey the
@@ -143,19 +140,6 @@ found:
     return 0;
   }
 
-  //part1
-   // Initialize demand paging / swap bookkeeping
-  p->next_seq   = 1;
-  p->num_pages  = 0;
-  p->swap_pages = 0;
-  p->swapfile   = 0;
-  memset(p->pages, 0, sizeof(p->pages));
-  
-  // part1 - Initialize executable file tracking
-  p->execfile = 0;
-  p->text_start = p->text_end = 0;
-  p->data_start = p->data_end = 0;
-
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -177,21 +161,6 @@ freeproc(struct proc *p)
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
-
-  // part1
-  // --- Demand paging / swap bookkeeping cleanup ---
-  p->next_seq   = 0;
-  p->num_pages  = 0;
-  p->swap_pages = 0;
-  memset(p->pages, 0, sizeof(p->pages));
-
-  if(p->swapfile){
-    fileclose(p->swapfile);
-    p->swapfile = 0;
-    // Later we’ll also unlink("/pgswpXXXXX") in exec/exit cleanup
-  }
-
-
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -254,40 +223,7 @@ userinit(void)
 
   p = allocproc();
   initproc = p;
-
-  //part1: For demand paging, we need to create a minimal init process
-  // Since we don't have embedded initcode, create a simple bootstrap
   
-  char *mem = kalloc();
-  if(mem == 0)
-    panic("userinit: out of memory");
-  memset(mem, 0, PGSIZE);
-  
-  // Create minimal code that calls exec("/init", 0)
-  // Using simple approach: just put exec syscall at address 0
-  uint32 *code = (uint32*)mem;
-  code[0] = 0x00000513;  // li a0, 0 (filename will be at higher address)
-  code[1] = 0x00000593;  // li a1, 0 (argv = NULL)
-  code[2] = 0x00700893;  // li a7, 7 (SYS_exec = 7 in xv6)
-  code[3] = 0x00000073;  // ecall
-  code[4] = 0x00100073;  // ebreak (if exec fails)
-  
-  // Put "/init" string at offset 32 bytes
-  char *initstr = mem + 32;
-  strcpy(initstr, "/init");
-  
-  // Fix the first instruction to point to the string
-  code[0] = 0x02000513;  // li a0, 32 (point to "/init" string)
-  
-  if(mappages(p->pagetable, 0, PGSIZE, (uint64)mem, PTE_W|PTE_R|PTE_X|PTE_U) < 0)
-    panic("userinit: mappages");
-  p->sz = PGSIZE;
-
-  // prepare trapframe to start at beginning of page
-  p->trapframe->epc = 0;
-  p->trapframe->sp = PGSIZE;
-
-  safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
 
   p->state = RUNNABLE;
@@ -351,22 +287,6 @@ kfork(void)
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
-  // part1 - copy demand paging state from parent to child
-  if(p->execfile) {
-    np->execfile = filedup(p->execfile);
-    np->text_start = p->text_start;
-    np->text_end = p->text_end;
-    np->data_start = p->data_start;
-    np->data_end = p->data_end;
-  }
-  
-  // Copy page tracking info (but not swap file - each process has its own)
-  for(i = 0; i < p->num_pages; i++) {
-    np->pages[i] = p->pages[i];
-  }
-  np->num_pages = p->num_pages;
-  np->next_seq = p->next_seq;
-
   pid = np->pid;
 
   release(&np->lock);
@@ -422,23 +342,6 @@ kexit(int status)
   end_op();
   p->cwd = 0;
 
-   //part1
-  p->xstate = status;
-  p->state = ZOMBIE;
-
-  if(p->swapfile){
-  fileclose(p->swapfile);
-  p->swapfile = 0;
-  // Optionally unlink the swapfile from the filesystem
-  // char path[32];
-  // snprintf(path, sizeof(path), "/pgswp%d", p->pid);
-  // unlink(path);
-  }
-  p->next_seq   = 0;
-  p->num_pages  = 0;
-  p->swap_pages = 0;
-  memset(p->pages, 0, sizeof(p->pages));
-
   acquire(&wait_lock);
 
   // Give any children to init.
@@ -449,8 +352,8 @@ kexit(int status)
   
   acquire(&p->lock);
 
-   
-
+  p->xstate = status;
+  p->state = ZOMBIE;
 
   release(&wait_lock);
 

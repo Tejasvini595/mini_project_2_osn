@@ -6,10 +6,8 @@
 #include "proc.h"
 #include "defs.h"
 #include "elf.h"
-#include "file.h"
 
-// part1 - loadseg function is unused in demand paging implementation
-// static int loadseg(pde_t *, uint64, struct inode *, uint, uint);
+static int loadseg(pde_t *, uint64, struct inode *, uint, uint);
 
 // map ELF permissions to PTE permission bits.
 int flags2perm(int flags)
@@ -57,12 +55,7 @@ kexec(char *path, char **argv)
   if((pagetable = proc_pagetable(p)) == 0)
     goto bad;
 
-  // part1 - Set up for demand paging instead of pre-loading
-  // Don't allocate physical pages yet, just track segments
-  uint64 text_start = 0, text_end = 0, data_start = 0, data_end = 0;
-  int found_text = 0, found_data = 0;
-  
-  // Parse program headers to identify segments but don't load them
+  // Load program into memory.
   for(i=0, off=elf.phoff; i<elf.phnum; i++, off+=sizeof(ph)){
     if(readi(ip, 0, (uint64)&ph, off, sizeof(ph)) != sizeof(ph))
       goto bad;
@@ -74,43 +67,13 @@ kexec(char *path, char **argv)
       goto bad;
     if(ph.vaddr % PGSIZE != 0)
       goto bad;
-    
-    // part1 - Track segment boundaries for demand loading
-    if(ph.flags & PTE_X) { // Text segment (executable)
-      if(!found_text) {
-        text_start = ph.vaddr;
-        found_text = 1;
-      }
-      text_end = ph.vaddr + ph.memsz;
-    } else { // Data segment  
-      if(!found_data) {
-        data_start = ph.vaddr;
-        found_data = 1;
-      }
-      data_end = ph.vaddr + ph.memsz;
-    }
-    
-    // Update process size but don't allocate physical pages
-    if(ph.vaddr + ph.memsz > sz)
-      sz = ph.vaddr + ph.memsz;
+    uint64 sz1;
+    if((sz1 = uvmalloc(pagetable, sz, ph.vaddr + ph.memsz, flags2perm(ph.flags))) == 0)
+      goto bad;
+    sz = sz1;
+    if(loadseg(pagetable, ph.vaddr, ip, ph.off, ph.filesz) < 0)
+      goto bad;
   }
-  
-  // part1 - Keep a reference to the executable file for demand loading
-  // We need to convert the inode to a file struct
-  struct file *execfile = 0;
-  if((execfile = filealloc()) == 0)
-    goto bad;
-  execfile->type = 2; // FD_INODE
-  execfile->ip = idup(ip);
-  execfile->off = 0;
-  execfile->readable = 1;
-  execfile->writable = 0;
-  
-  p->execfile = execfile;
-  p->text_start = text_start;
-  p->text_end = text_end;
-  p->data_start = data_start;
-  p->data_end = data_end;
   iunlockput(ip);
   end_op();
   ip = 0;
@@ -118,27 +81,17 @@ kexec(char *path, char **argv)
   p = myproc();
   uint64 oldsz = p->sz;
 
-  // part1 - Set up stack layout, but only allocate the top page for arguments
+  // Allocate some pages at the next page boundary.
+  // Make the first inaccessible as a stack guard.
+  // Use the rest as the user stack.
   sz = PGROUNDUP(sz);
-  sz += (USERSTACK+1)*PGSIZE;  // Reserve space for stack
+  uint64 sz1;
+  if((sz1 = uvmalloc(pagetable, sz, sz + (USERSTACK+1)*PGSIZE, PTE_W)) == 0)
+    goto bad;
+  sz = sz1;
+  uvmclear(pagetable, sz-(USERSTACK+1)*PGSIZE);
   sp = sz;
   stackbase = sp - USERSTACK*PGSIZE;
-  
-  // Allocate only the top stack page where we'll put arguments
-  char *stackpage = kalloc();
-  if(stackpage == 0)
-    goto bad;
-  memset(stackpage, 0, PGSIZE);
-  
-  // Map just the top stack page
-  uint64 stack_top = sz - PGSIZE;
-  if(mappages(pagetable, stack_top, PGSIZE, (uint64)stackpage, PTE_W | PTE_R | PTE_U) < 0) {
-    kfree(stackpage);
-    goto bad;
-  }
-  
-  // Adjust sp to be within the allocated page
-  sp = sz;
 
   // Copy argument strings into new stack, remember their
   // addresses in ustack[].
@@ -198,8 +151,6 @@ kexec(char *path, char **argv)
 // va must be page-aligned
 // and the pages from va to va+sz must already be mapped.
 // Returns 0 on success, -1 on failure.
-// part1 - This function is unused in demand paging implementation
-/*
 static int
 loadseg(pagetable_t pagetable, uint64 va, struct inode *ip, uint offset, uint sz)
 {
@@ -220,4 +171,3 @@ loadseg(pagetable_t pagetable, uint64 va, struct inode *ip, uint offset, uint sz
   
   return 0;
 }
-*/
